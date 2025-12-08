@@ -79,7 +79,7 @@ jobs:
           echo "pgdg_codename=$PGDG_CODENAME" >> $GITHUB_OUTPUT
 
   build:
-    name: Build (amd64 + arm64)
+    name: Build
     needs: prepare
     runs-on: ubuntu-latest
     services:
@@ -87,6 +87,11 @@ jobs:
         image: registry:2
         ports:
           - 5000:5000
+        options: >-
+          --health-cmd="wget --quiet --tries=1 --spider http://localhost:5000/v2/ || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64]
@@ -106,8 +111,21 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver-options: |
-            image=moby/buildkit:latest
             network=host
+
+      - name: Wait for registry to be ready
+        run: |
+          set -eux
+          for i in {1..30}; do
+            if wget --quiet --tries=1 --spider http://localhost:5000/v2/; then
+              echo "Registry is ready"
+              exit 0
+            fi
+            echo "Waiting for registry... ($i/30)"
+            sleep 2
+          done
+          echo "Registry failed to start"
+          exit 1
 
       - name: Build and push to local registry (${{ matrix.tag_suffix }})
         uses: docker/build-push-action@v4
@@ -117,8 +135,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-${{ matrix.tag_suffix }}
-            ${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:latest-${{ matrix.tag_suffix }}
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-${{ matrix.tag_suffix }}
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:latest-${{ matrix.tag_suffix }}
 
   push-to-ghcr:
     name: Create manifests & push to GHCR
@@ -131,6 +149,11 @@ jobs:
         image: registry:2
         ports:
           - 5000:5000
+        options: >-
+          --health-cmd="wget --quiet --tries=1 --spider http://localhost:5000/v2/ || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,7 +162,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver-options: |
-            image=moby/buildkit:latest
             network=host
 
       - name: Log in to GHCR
@@ -149,10 +171,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Wait for registry to be ready
+        run: |
+          set -eux
+          for i in {1..30}; do
+            if wget --quiet --tries=1 --spider http://localhost:5000/v2/; then
+              echo "Registry is ready"
+              exit 0
+            fi
+            echo "Waiting for registry... ($i/30)"
+            sleep 2
+          done
+          echo "Registry failed to start"
+          exit 1
+
       - name: Create and push multi-arch manifest for version tag
         run: |
           set -eux
-          LOCAL_IMAGE="${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}"
+          LOCAL_IMAGE="localhost:5000/${{ env.GHCR_IMAGE_NAME }}"
           GHCR_IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
           TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
 
@@ -166,7 +202,7 @@ jobs:
       - name: Create and push multi-arch manifest for latest tag
         run: |
           set -eux
-          LOCAL_IMAGE="${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}"
+          LOCAL_IMAGE="localhost:5000/${{ env.GHCR_IMAGE_NAME }}"
           GHCR_IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
 
           docker buildx imagetools create --tag ${GHCR_IMAGE}:latest \
