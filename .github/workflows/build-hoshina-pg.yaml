@@ -109,9 +109,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver-options: |
-            network=host
 
       - name: Wait for registry to be ready
         run: |
