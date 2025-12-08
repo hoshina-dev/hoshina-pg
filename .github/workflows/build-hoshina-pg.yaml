@@ -10,6 +10,10 @@ on:
         description: 'Semantic version (e.g. 1.2.3).'
         required: false
 
+permissions:
+  contents: write
+  packages: write
+
 env:
   DOCKERFILE_PATH: Dockerfile
   GHCR_REGISTRY: ghcr.io
@@ -212,3 +216,37 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup:
+    name: Cleanup temporary build images
+    needs:
+      - push-to-ghcr
+      - prepare
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Delete temporary build package
+        run: |
+          set -eux
+          
+          # Extract package name from image name
+          PACKAGE_NAME="${{ env.GHCR_IMAGE_NAME }}-build"
+          OWNER="${{ github.repository_owner }}"
+          
+          echo "Attempting to delete package: ${PACKAGE_NAME}"
+          
+          # Get package versions and delete them
+          # Note: We need to delete all versions, or delete the entire package
+          
+          # Try to delete the entire package (this will fail if package doesn't exist, which is fine)
+          curl -X DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/user/packages/container/${PACKAGE_NAME}" \
+            || echo "Package ${PACKAGE_NAME} may not exist or already deleted"
+          
+          echo "Cleanup completed"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
