@@ -14,6 +14,8 @@ env:
   DOCKERFILE_PATH: Dockerfile
   GHCR_REGISTRY: ghcr.io
   GHCR_IMAGE_NAME: hoshina-pg
+  LOCAL_REGISTRY: localhost:5000
+  LOCAL_REGISTRY_NAME: temp-registry
 
 jobs:
   prepare:
@@ -76,10 +78,23 @@ jobs:
           echo "postgis_major=$POSTGIS_MAJOR" >> $GITHUB_OUTPUT
           echo "pgdg_codename=$PGDG_CODENAME" >> $GITHUB_OUTPUT
 
-  build-amd64:
-    name: Build & push (amd64)
+  build:
+    name: Build (amd64 + arm64)
     needs: prepare
     runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            tag_suffix: amd64
+          - platform: linux/arm64
+            tag_suffix: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,68 +104,43 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v2
         with:
-          registry: ${{ env.GHCR_REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          driver-options: |
+            image=moby/buildkit:latest
+            network=host
 
-      - name: Build and push amd64 image
+      - name: Build and push to local registry (${{ matrix.tag_suffix }})
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ${{ env.DOCKERFILE_PATH }}
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            ${{ needs.prepare.outputs.ghcr_image_full }}:${{ needs.prepare.outputs.tag_version }}-amd64
-            ${{ needs.prepare.outputs.ghcr_image_full }}:latest-amd64
+            ${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-${{ matrix.tag_suffix }}
+            ${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:latest-${{ matrix.tag_suffix }}
 
-  build-arm64:
-    name: Build & push (arm64)
-    needs: prepare
-    # GitHub-hosted arm64 runners (public repo): ubuntu-22.04-arm or ubuntu-24.04-arm
-    runs-on: ubuntu-22.04-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ env.GHCR_REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push arm64 image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ${{ env.DOCKERFILE_PATH }}
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ${{ needs.prepare.outputs.ghcr_image_full }}:${{ needs.prepare.outputs.tag_version }}-arm64
-            ${{ needs.prepare.outputs.ghcr_image_full }}:latest-arm64
-
-  create-manifests:
-    name: Create multi-arch manifests and Release
+  push-to-ghcr:
+    name: Create manifests & push to GHCR
     needs:
-      - build-amd64
-      - build-arm64
+      - build
       - prepare
     runs-on: ubuntu-latest
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-options: |
+            image=moby/buildkit:latest
+            network=host
 
       - name: Log in to GHCR
         uses: docker/login-action@v2
@@ -159,24 +149,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-
-      - name: Create multi-arch GHCR image for version tag
+      - name: Create and push multi-arch manifest for version tag
         run: |
           set -eux
-          IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
+          LOCAL_IMAGE="${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}"
+          GHCR_IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
           TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
 
-          docker buildx imagetools create --tag ${IMAGE}:${TAG_VERSION} \
-            ${IMAGE}:${TAG_VERSION}-amd64 \
-            ${IMAGE}:${TAG_VERSION}-arm64
+          docker buildx imagetools create --tag ${GHCR_IMAGE}:${TAG_VERSION} \
+            ${LOCAL_IMAGE}:${TAG_VERSION}-amd64 \
+            ${LOCAL_IMAGE}:${TAG_VERSION}-arm64
 
-      - name: Create multi-arch GHCR image for latest tag
+          docker pull ${GHCR_IMAGE}:${TAG_VERSION}
+          docker push ${GHCR_IMAGE}:${TAG_VERSION}
+
+      - name: Create and push multi-arch manifest for latest tag
         run: |
           set -eux
-          IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
-          docker buildx imagetools create --tag ${IMAGE}:latest \
-            ${IMAGE}:latest-amd64 \
-            ${IMAGE}:latest-arm64
+          LOCAL_IMAGE="${{ env.LOCAL_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}"
+          GHCR_IMAGE="${{ needs.prepare.outputs.ghcr_image_full }}"
+
+          docker buildx imagetools create --tag ${GHCR_IMAGE}:latest \
+            ${LOCAL_IMAGE}:latest-amd64 \
+            ${LOCAL_IMAGE}:latest-arm64
+
+          docker pull ${GHCR_IMAGE}:latest
+          docker push ${GHCR_IMAGE}:latest
 
       - name: Create GitHub Release
         id: create_release
