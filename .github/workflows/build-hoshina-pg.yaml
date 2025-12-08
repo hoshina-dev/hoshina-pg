@@ -109,12 +109,25 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Configure Docker for insecure registry
+        run: |
+          mkdir -p ~/.docker
+          cat > ~/.docker/config.json <<EOF
+          {
+            "insecureRegistries": ["localhost:5000"]
+          }
+          EOF
 
       - name: Wait for registry to be ready
         run: |
           set -eux
           for i in {1..30}; do
-            if wget --quiet --tries=1 --spider http://localhost:5000/v2/; then
+            if wget --quiet --tries=1 --spider http://127.0.0.1:5000/v2/; then
               echo "Registry is ready"
               exit 0
             fi
@@ -158,8 +171,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          driver-options: |
+          driver-opts: |
+            image=moby/buildkit:latest
             network=host
+
+      - name: Configure Docker for insecure registry
+        run: |
+          mkdir -p ~/.docker
+          cat > ~/.docker/config.json <<EOF
+          {
+            "insecureRegistries": ["localhost:5000"]
+          }
+          EOF
 
       - name: Log in to GHCR
         uses: docker/login-action@v2
@@ -172,7 +195,7 @@ jobs:
         run: |
           set -eux
           for i in {1..30}; do
-            if wget --quiet --tries=1 --spider http://localhost:5000/v2/; then
+            if wget --quiet --tries=1 --spider http://127.0.0.1:5000/v2/; then
               echo "Registry is ready"
               exit 0
             fi
