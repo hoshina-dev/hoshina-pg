@@ -180,7 +180,7 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ needs.prepare.outputs.semver }}
+          tag_name: ${{ needs.prepare.outputs.semver }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -195,7 +195,7 @@ jobs:
           GHCR_IMAGE_FULL="${{ needs.prepare.outputs.ghcr_image_full }}"
           TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
 
-          RELEASE_TAG="v${SEMVER}"
+          RELEASE_TAG="${SEMVER}"
 
           BODY="Postgres version: ${PG_MAJOR}\n\n# Extension version\nPostgis: ${POSTGIS_MAJOR}\n\nPGDG codename: ${PGDG_CODENAME}\n\nDocker images pushed:\n- ${GHCR_IMAGE_FULL}:${TAG_VERSION}\n- ${GHCR_IMAGE_FULL}:latest\n"
 
