@@ -12,8 +12,6 @@ on:
 
 env:
   DOCKERFILE_PATH: Dockerfile
-  IMAGE_NAMESPACE: hoshina-dev
-  IMAGE_NAME: hoshina-pg
   GHCR_REGISTRY: ghcr.io
   GHCR_IMAGE_NAME: hoshina-pg
 
@@ -24,7 +22,6 @@ jobs:
     outputs:
       semver: ${{ steps.set.outputs.semver }}
       tag_version: ${{ steps.set.outputs.tag_version }}
-      image_full: ${{ steps.set.outputs.image_full }}
       ghcr_image_full: ${{ steps.set.outputs.ghcr_image_full }}
       pg_major: ${{ steps.set.outputs.pg_major }}
       postgis_major: ${{ steps.set.outputs.postgis_major }}
@@ -69,13 +66,11 @@ jobs:
             fi
           fi
 
-          IMAGE_FULL="${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}"
           GHCR_IMAGE_FULL="${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.GHCR_IMAGE_NAME }}"
           TAG_VERSION="$PG_MAJOR-$SEMVER"
 
           echo "semver=$SEMVER" >> $GITHUB_OUTPUT
           echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
-          echo "image_full=$IMAGE_FULL" >> $GITHUB_OUTPUT
           echo "ghcr_image_full=$GHCR_IMAGE_FULL" >> $GITHUB_OUTPUT
           echo "pg_major=$PG_MAJOR" >> $GITHUB_OUTPUT
           echo "postgis_major=$POSTGIS_MAJOR" >> $GITHUB_OUTPUT
@@ -95,12 +90,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Log in to GHCR
         uses: docker/login-action@v2
         with:
@@ -116,8 +105,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ${{ needs.prepare.outputs.image_full }}:${{ needs.prepare.outputs.tag_version }}-amd64
-            ${{ needs.prepare.outputs.image_full }}:latest-amd64
             ${{ needs.prepare.outputs.ghcr_image_full }}:${{ needs.prepare.outputs.tag_version }}-amd64
             ${{ needs.prepare.outputs.ghcr_image_full }}:latest-amd64
 
@@ -136,12 +123,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Log in to GHCR
         uses: docker/login-action@v2
         with:
@@ -157,8 +138,6 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: |
-            ${{ needs.prepare.outputs.image_full }}:${{ needs.prepare.outputs.tag_version }}-arm64
-            ${{ needs.prepare.outputs.image_full }}:latest-arm64
             ${{ needs.prepare.outputs.ghcr_image_full }}:${{ needs.prepare.outputs.tag_version }}-arm64
             ${{ needs.prepare.outputs.ghcr_image_full }}:latest-arm64
 
@@ -173,12 +152,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Log in to GHCR
         uses: docker/login-action@v2
         with:
@@ -186,23 +159,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create multi-arch image for version tag
-        run: |
-          set -eux
-          IMAGE="${{ needs.prepare.outputs.image_full }}"
-          TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
-
-          docker buildx imagetools create --tag ${IMAGE}:${TAG_VERSION} \
-            ${IMAGE}:${TAG_VERSION}-amd64 \
-            ${IMAGE}:${TAG_VERSION}-arm64
-
-      - name: Create multi-arch image for latest tag
-        run: |
-          set -eux
-          IMAGE="${{ needs.prepare.outputs.image_full }}"
-          docker buildx imagetools create --tag ${IMAGE}:latest \
-            ${IMAGE}:latest-amd64 \
-            ${IMAGE}:latest-arm64
 
       - name: Create multi-arch GHCR image for version tag
         run: |
@@ -238,13 +194,12 @@ jobs:
           PG_MAJOR="${{ needs.prepare.outputs.pg_major }}"
           POSTGIS_MAJOR="${{ needs.prepare.outputs.postgis_major }}"
           PGDG_CODENAME="${{ needs.prepare.outputs.pgdg_codename }}"
-          IMAGE_FULL="${{ needs.prepare.outputs.image_full }}"
           GHCR_IMAGE_FULL="${{ needs.prepare.outputs.ghcr_image_full }}"
           TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
 
           RELEASE_TAG="v${SEMVER}"
 
-          BODY="Postgres version: ${PG_MAJOR}\n\n# Extension version\nPostgis: ${POSTGIS_MAJOR}\n\nPGDG codename: ${PGDG_CODENAME}\n\nDocker images pushed:\n\n## Docker Hub\n- ${IMAGE_FULL}:${TAG_VERSION}\n- ${IMAGE_FULL}:latest\n\n## GHCR\n- ${GHCR_IMAGE_FULL}:${TAG_VERSION}\n- ${GHCR_IMAGE_FULL}:latest\n"
+          BODY="Postgres version: ${PG_MAJOR}\n\n# Extension version\nPostgis: ${POSTGIS_MAJOR}\n\nPGDG codename: ${PGDG_CODENAME}\n\nDocker images pushed:\n- ${GHCR_IMAGE_FULL}:${TAG_VERSION}\n- ${GHCR_IMAGE_FULL}:latest\n"
 
           API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
           release_id=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "$API_URL" | jq -r .id)
