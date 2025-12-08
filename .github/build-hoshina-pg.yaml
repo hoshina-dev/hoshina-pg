@@ -1,0 +1,212 @@
+name: Build hoshina-pg
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      semantic_version:
+        description: 'Semantic version (e.g. 1.2.3).'
+        required: false
+
+env:
+  DOCKERFILE_PATH: Dockerfile
+  IMAGE_NAMESPACE: hoshina-dev
+  IMAGE_NAME: hoshina-pg
+
+jobs:
+  prepare:
+    name: Prepare variables
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.set.outputs.semver }}
+      tag_version: ${{ steps.set.outputs.tag_version }}
+      image_full: ${{ steps.set.outputs.image_full }}
+      pg_major: ${{ steps.set.outputs.pg_major }}
+      postgis_major: ${{ steps.set.outputs.postgis_major }}
+      pgdg_codename: ${{ steps.set.outputs.pgdg_codename }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read versions from Dockerfile and determine tags
+        id: set
+        run: |
+          set -eux
+          FILE="${{ env.DOCKERFILE_PATH }}"
+
+          extract() {
+            local key="$1"
+            local val
+            val=$(grep -m1 -E "^ARG[[:space:]]+${key}=" "$FILE" || true)
+            if [ -n "$val" ]; then
+              echo "$val" | sed -E "s/^ARG[[:space:]]+${key}=(.*)/\1/"
+            else
+              echo ""
+            fi
+          }
+
+          PG_MAJOR=$(extract PG_MAJOR)
+          POSTGIS_MAJOR=$(extract POSTGIS_MAJOR)
+          PGDG_CODENAME=$(extract PGDG_CODENAME)
+
+          PG_MAJOR=${PG_MAJOR:-}
+          POSTGIS_MAJOR=${POSTGIS_MAJOR:-}
+          PGDG_CODENAME=${PGDG_CODENAME:-}
+
+          # determine semver
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            SEMVER=${GITHUB_REF#refs/tags/}
+          else
+            SEMVER="${{ github.event.inputs.semantic_version }}"
+            if [ -z "$SEMVER" ]; then
+              echo "No semantic version provided. Provide a tag (X.Y.Z) or workflow input 'semantic_version'." >&2
+              exit 1
+            fi
+          fi
+
+          IMAGE_FULL="${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          TAG_VERSION="$PG_MAJOR-$SEMVER"
+
+          echo "semver=$SEMVER" >> $GITHUB_OUTPUT
+          echo "tag_version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "image_full=$IMAGE_FULL" >> $GITHUB_OUTPUT
+          echo "pg_major=$PG_MAJOR" >> $GITHUB_OUTPUT
+          echo "postgis_major=$POSTGIS_MAJOR" >> $GITHUB_OUTPUT
+          echo "pgdg_codename=$PGDG_CODENAME" >> $GITHUB_OUTPUT
+
+  build-amd64:
+    name: Build & push (amd64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push amd64 image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ needs.prepare.outputs.image_full }}:${{ needs.prepare.outputs.tag_version }}-amd64
+            ${{ needs.prepare.outputs.image_full }}:latest-amd64
+
+  build-arm64:
+    name: Build & push (arm64)
+    needs: prepare
+    # GitHub-hosted arm64 runners (public repo): ubuntu-22.04-arm or ubuntu-24.04-arm
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push arm64 image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ needs.prepare.outputs.image_full }}:${{ needs.prepare.outputs.tag_version }}-arm64
+            ${{ needs.prepare.outputs.image_full }}:latest-arm64
+
+  create-manifests:
+    name: Create multi-arch manifests and Release
+    needs:
+      - build-amd64
+      - build-arm64
+      - prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create multi-arch image for version tag
+        run: |
+          set -eux
+          IMAGE="${{ needs.prepare.outputs.image_full }}"
+          TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
+
+          docker buildx imagetools create --tag ${IMAGE}:${TAG_VERSION} \
+            ${IMAGE}:${TAG_VERSION}-amd64 \
+            ${IMAGE}:${TAG_VERSION}-arm64
+
+      - name: Create multi-arch image for latest tag
+        run: |
+          set -eux
+          IMAGE="${{ needs.prepare.outputs.image_full }}"
+          docker buildx imagetools create --tag ${IMAGE}:latest \
+            ${IMAGE}:latest-amd64 \
+            ${IMAGE}:latest-arm64
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.prepare.outputs.semver }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update release body with Dockerfile values
+        if: always()
+        run: |
+          set -eux
+          SEMVER="${{ needs.prepare.outputs.semver }}"
+          PG_MAJOR="${{ needs.prepare.outputs.pg_major }}"
+          POSTGIS_MAJOR="${{ needs.prepare.outputs.postgis_major }}"
+          PGDG_CODENAME="${{ needs.prepare.outputs.pgdg_codename }}"
+          IMAGE_FULL="${{ needs.prepare.outputs.image_full }}"
+          TAG_VERSION="${{ needs.prepare.outputs.tag_version }}"
+
+          RELEASE_TAG="v${SEMVER}"
+
+          BODY="Postgres version: ${PG_MAJOR}\n\n# Extension version\nPostgis: ${POSTGIS_MAJOR}\n\nPGDG codename: ${PGDG_CODENAME}\n\nDocker images pushed:\n- ${IMAGE_FULL}:${TAG_VERSION}\n- ${IMAGE_FULL}:latest\n"
+
+          API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+          release_id=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" "$API_URL" | jq -r .id)
+          if [ "$release_id" = "null" ] || [ -z "$release_id" ]; then
+            curl -s -X POST -H "Authorization: token ${GITHUB_TOKEN}" \
+              -d "{\"tag_name\": \"${RELEASE_TAG}\", \"name\": \"${RELEASE_TAG}\", \"body\": \"${BODY}\"}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" | jq .
+          else
+            curl -s -X PATCH -H "Authorization: token ${GITHUB_TOKEN}" \
+              -d "{\"body\": \"${BODY}\"}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}" | jq .
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
