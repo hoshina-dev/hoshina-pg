@@ -78,10 +78,10 @@ jobs:
           echo "postgis_major=$POSTGIS_MAJOR" >> $GITHUB_OUTPUT
           echo "pgdg_codename=$PGDG_CODENAME" >> $GITHUB_OUTPUT
 
-  build:
-    name: Build
+  build-amd64:
+    name: Build (amd64)
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       registry:
         image: registry:2
@@ -92,20 +92,9 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-    strategy:
-      matrix:
-        platform: [linux/amd64, linux/arm64]
-        include:
-          - platform: linux/amd64
-            tag_suffix: amd64
-          - platform: linux/arm64
-            tag_suffix: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -137,23 +126,83 @@ jobs:
           echo "Registry failed to start"
           exit 1
 
-      - name: Build and push to local registry (${{ matrix.tag_suffix }})
+      - name: Build and push amd64 image to local registry
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ${{ env.DOCKERFILE_PATH }}
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           push: true
           tags: |
-            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-${{ matrix.tag_suffix }}
-            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:latest-${{ matrix.tag_suffix }}
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-amd64
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:latest-amd64
+
+  build-arm64:
+    name: Build (arm64)
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+        options: >-
+          --health-cmd="wget --quiet --tries=1 --spider http://localhost:5000/v2/ || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
+      - name: Configure Docker for insecure registry
+        run: |
+          mkdir -p ~/.docker
+          cat > ~/.docker/config.json <<EOF
+          {
+            "insecureRegistries": ["localhost:5000"]
+          }
+          EOF
+
+      - name: Wait for registry to be ready
+        run: |
+          set -eux
+          for i in {1..30}; do
+            if wget --quiet --tries=1 --spider http://127.0.0.1:5000/v2/; then
+              echo "Registry is ready"
+              exit 0
+            fi
+            echo "Waiting for registry... ($i/30)"
+            sleep 2
+          done
+          echo "Registry failed to start"
+          exit 1
+
+      - name: Build and push arm64 image to local registry
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/arm64
+          push: true
+          tags: |
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:${{ needs.prepare.outputs.tag_version }}-arm64
+            localhost:5000/${{ env.GHCR_IMAGE_NAME }}:latest-arm64
 
   push-to-ghcr:
     name: Create manifests & push to GHCR
     needs:
-      - build
+      - build-amd64
+      - build-arm64
       - prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       registry:
         image: registry:2
