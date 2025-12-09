@@ -59,7 +59,20 @@ RUN set -eux; \
       https://raw.githubusercontent.com/docker-library/postgres/master/docker-entrypoint.sh; \
     chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENV PGDATA=/var/lib/postgresql/data
+# Create directory for initialization scripts
+RUN mkdir -p /docker-entrypoint-initdb.d
+
+# Create postgres user if it doesn't exist (needed by entrypoint script)
+RUN set -eux; \
+    if ! id postgres > /dev/null 2>&1; then \
+      useradd -m -d /var/lib/postgresql -s /bin/bash postgres; \
+    fi; \
+    mkdir -p /var/lib/postgresql/data; \
+    chown -R postgres:postgres /var/lib/postgresql /docker-entrypoint-initdb.d
+
+# Set PATH to include PostgreSQL binaries
+ENV PATH=/usr/lib/postgresql/$PG_MAJOR/bin:$PATH \
+    PGDATA=/var/lib/postgresql/data
 VOLUME ["/var/lib/postgresql/data"]
 EXPOSE 5432
 
