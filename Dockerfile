@@ -77,4 +77,4 @@ VOLUME ["/var/lib/postgresql/data"]
 EXPOSE 5432
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["postgres"]
+CMD ["postgres", "-c", "listen_addresses=*"]
