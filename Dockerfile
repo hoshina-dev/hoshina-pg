@@ -48,18 +48,7 @@ RUN set -eux; \
     && rm -rf /var/lib/apt/lists/*
 
 
-FROM postgis-stage AS trigram-stage
-
-ARG DEBIAN_FRONTEND
-ARG PG_MAJOR
-
-# Install PostgreSQL trigram extension (pg_trgm) from contrib
-RUN set -eux; \
-    apt-get update && apt-get install -y --no-install-recommends \
-      "postgresql-${PG_MAJOR}-contrib" \
-    && rm -rf /var/lib/apt/lists/*
-
-FROM trigram-stage AS hoshina-pg
+FROM postgis-stage AS hoshina-pg
 
 ARG PG_MAJOR
 ARG POSTGIS_MAJOR
